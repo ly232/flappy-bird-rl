@@ -1,0 +1,11 @@
+[project]
+name = "flappy-bird-rl"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flappy-bird-gymnasium>=0.4.0",
+    "gymnasium[other]>=1.2.3",
+    "pygame>=2.6.1",
+]
