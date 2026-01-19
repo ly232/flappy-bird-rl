@@ -43,11 +43,11 @@ def test_episode(monkeypatch):
             self.last_reward = None
             self.last_traj = None
 
-        def next_action(self, obs):
+        def next_action(self, episode_id, obs):
             self.actions.append(obs)
             return 'action'
 
-        def notify_termination(self, reward, trajectory):
+        def notify_termination(self, episode_id, reward, trajectory):
             self.notified = True
             self.last_reward = reward
             self.last_traj = trajectory
