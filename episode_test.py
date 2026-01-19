@@ -40,16 +40,14 @@ def test_episode(monkeypatch):
         def __init__(self):
             self.actions = []
             self.notified = False
-            self.last_reward = None
             self.last_traj = None
 
         def next_action(self, episode_id, obs):
             self.actions.append(obs)
             return 'action'
 
-        def notify_termination(self, episode_id, reward, trajectory):
+        def notify_termination(self, episode_id, trajectory):
             self.notified = True
-            self.last_reward = reward
             self.last_traj = trajectory
 
     agt = MockAgent()
@@ -57,7 +55,6 @@ def test_episode(monkeypatch):
     ep.run()
 
     assert agt.notified is True
-    assert agt.last_reward == 2.0
     assert agt.last_traj == [
         'obs0', 'action', 1.0,
         'obs1', 'action', 2.0,

@@ -3,21 +3,22 @@
 uv run python main.py
 """
 
-from concurrent.futures import ThreadPoolExecutor
-
-import episode
 import agent
+import episode
+import tqdm
 
 
-_NUM_EPISODES = 10
+_NUM_EPISODES = 100
+
+
+def run(agt: agent.Agent, num_episodes: int = _NUM_EPISODES) -> None:
+    """Runs multiple episodes sequentially using the given agent."""
+    for _ in tqdm.tqdm(range(num_episodes), desc='Episodes'):
+        episode.Episode(agt).run()
 
 
 if __name__ == '__main__':
-    agt = agent.NaiveCyclicAgent()
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [
-            executor.submit(episode.Episode(agt).run) 
-            for _ in range(_NUM_EPISODES)
-        ]
-    for future in futures:
-        future.result()
+    # print('====== Running NaiveCyclicAgent ======')
+    # run(agent.NaiveCyclicAgent())
+    print('====== Running MonteCarloTabularAgent ======')
+    run(agent.MonteCarloTabularAgent())

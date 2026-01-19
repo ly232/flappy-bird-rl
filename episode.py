@@ -41,9 +41,10 @@ class Episode():
                 reward,
                 obs,
             ])
+            self._agent.notify_reward_and_new_state(self._episode_id, reward, obs)
 
         # Upon termination, signal agent on the final reward.
-        self._agent.notify_termination(
-            self._episode_id, reward, self._trajectory)
+        self._agent.notify_termination(self._episode_id, self._trajectory)
+        print(f'final score: {info.get("final_score", 0)}, final reward: {reward}')
 
         self._env.close()

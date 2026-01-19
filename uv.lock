@@ -138,6 +138,7 @@ dependencies = [
     { name = "jaxtyping" },
     { name = "pygame" },
     { name = "pytest" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
@@ -147,6 +148,7 @@ requires-dist = [
     { name = "jaxtyping", specifier = ">=0.3.5" },
     { name = "pygame", specifier = ">=2.6.1" },
     { name = "pytest", specifier = ">=9.0.2" },
+    { name = "tqdm", specifier = ">=4.67.1" },
 ]
 
 [[package]]
