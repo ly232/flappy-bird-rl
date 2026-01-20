@@ -8,6 +8,7 @@ dependencies = [
     "flappy-bird-gymnasium>=0.4.0",
     "gymnasium[other]>=1.2.3",
     "jaxtyping>=0.3.5",
+    "matplotlib>=3.10.8",
     "pygame>=2.6.1",
     "pytest>=9.0.2",
     "tqdm>=4.67.1",

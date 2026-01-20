@@ -8,6 +8,7 @@ import abc
 import collections
 import itertools
 
+import matplotlib.pyplot as plt
 import numpy as np
 import uuid
 
@@ -21,15 +22,17 @@ ActType = Actions
 class Agent(abc.ABC):
     """Abstract base class for all agents."""
 
+    def __init__(self):
+        self._total_rewards: list[float] = []
+
     @abc.abstractmethod
-    def next_action(
-        self, episode_id: uuid.UUID, observation: ObsType) -> Actions:
+    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> Actions:
         """Selects an action based on the given observation.
-        
+
         Args:
             episode_id: The unique identifier for the current episode.
             observation: The current observation from the environment.
-        
+
         Returns:
             The action selected by the agent.
         """
@@ -37,12 +40,13 @@ class Agent(abc.ABC):
 
     @abc.abstractmethod
     def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType):
+        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
+    ):
         """Notifies the agent of a received reward and new observation.
 
         The environment is responsible for always calling this method after
-        calling `step(action)` for an action produced by `next_action(observation)`. 
-        
+        calling `step(action)` for an action produced by `next_action(observation)`.
+
         Args:
             episode_id: The unique identifier for the current episode.
             reward: The reward received after taking an action.
@@ -53,12 +57,20 @@ class Agent(abc.ABC):
     @abc.abstractmethod
     def notify_termination(self, episode_id: uuid.UUID, trajectory: list[Any]):
         """Notifies the agent of episode termination.
-        
+
         Args:
             episode_id: The unique identifier for the current episode.
             trajectory: The full trajectory of the episode.
         """
         pass
+
+    def plot_total_rewards(self) -> None:
+        """Plots the total rewards over episodes."""
+        plt.plot(self._total_rewards)
+        plt.xlabel("Episode")
+        plt.ylabel("Total Reward")
+        plt.title(f"Total Rewards over Episodes for {self.__class__.__name__}")
+        plt.show()
 
 
 class NaiveCyclicAgent(Agent):
@@ -66,34 +78,39 @@ class NaiveCyclicAgent(Agent):
 
     def __init__(self, num_noops_till_flap: int = 15):
         """Initializes the agent.
-        
+
         Args:
             num_noops_till_flap: Number of no-op actions before a flap action.
         """
+        super().__init__()
         self._action_cycles: dict[uuid.UUID, itertools.cycle] = collections.defaultdict(
             lambda: itertools.cycle(
-                [ActType.IDLE] * num_noops_till_flap + [ActType.FLAP]))
+                [ActType.IDLE] * num_noops_till_flap + [ActType.FLAP]
+            )
+        )
 
     @override
-    def next_action(
-        self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
+    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
         return next(self._action_cycles[episode_id])
-    
+
     @override
     def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType):
+        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
+    ):
         pass
-    
+
     @override
-    def notify_termination(
-        self, episode_id: uuid.UUID, trajectory: list[Any]):
-        pass
+    def notify_termination(self, episode_id: uuid.UUID, trajectory: list[Any]):
+        rewards = trajectory[2::3]
+        print(f"total reward this episode: {sum(rewards)}")
+        self._total_rewards.append(sum(rewards))
 
 
 class MonteCarloTabularAgent(Agent):
     """An agent that uses Monte Carlo every-visit tabular method to learn a policy."""
 
-    def __init__(self, gamma: float = 0.9):
+    def __init__(self, gamma: float = 1.0):
+        super().__init__()
         self._q: dict[tuple[ObsType, ActType], float] = collections.defaultdict(float)
         self._n: dict[tuple[ObsType, ActType], int] = collections.Counter()
         self._gamma = gamma
@@ -101,18 +118,17 @@ class MonteCarloTabularAgent(Agent):
 
     def _serialize_observation(self, obs: ObsType) -> str:
         """Serializes the raw observations.
-        
+
         Note that to simplify state space, we only keep the middle 60 readings,
         corresponding to +/- 30 degrees in front of the bird).
         """
         return tuple(np.round(obs[30:150:1], 2))
 
     @override
-    def next_action(
-        self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
+    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
         observation = self._serialize_observation(observation)
         # Greedy exploitation.
-        best_action, best_value = None, float('-inf')
+        best_action, best_value = None, float("-inf")
         for action in ActType:
             q_value = self._q[(observation, action)]
             if q_value > best_value:
@@ -123,7 +139,8 @@ class MonteCarloTabularAgent(Agent):
         eps = max(0.1, 1.0 / np.sqrt(self._episode_count + 1))
         probabilities = {
             action: (
-                eps / len(ActType) + (1 - eps) if action == best_action 
+                eps / len(ActType) + (1 - eps)
+                if action == best_action
                 else (eps / len(ActType))
             )
             for action in ActType
@@ -135,7 +152,8 @@ class MonteCarloTabularAgent(Agent):
 
     @override
     def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType):
+        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
+    ):
         # No-op because MC only updates at episode termination.
         pass
 
@@ -147,9 +165,10 @@ class MonteCarloTabularAgent(Agent):
         states = trajectory[0::3]
         actions = trajectory[1::3]
         rewards = trajectory[2::3]
+        print(f"total reward this episode: {sum(rewards)}")
+        self._total_rewards.append(sum(rewards))
         for s, a, r in reversed(list(zip(states, actions, rewards))):
             gain = r + self._gamma * gain
             key = (self._serialize_observation(s), a)
             self._n[key] += 1
-            self._q[key] += \
-                1 / self._n[key] * (gain - self._q[key])
+            self._q[key] += 1 / self._n[key] * (gain - self._q[key])
