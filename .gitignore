@@ -12,3 +12,6 @@ wheels/
 # Developement files
 .vscode
 uv.lock
+*.pkl
+*.zip
+ckpt/
