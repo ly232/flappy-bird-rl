@@ -4,6 +4,7 @@ from flappy_bird_gymnasium.envs.flappy_bird_env import Actions
 from jaxtyping import Float
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from typing import override, Any
 
 import abc
@@ -12,7 +13,6 @@ import itertools
 
 import matplotlib.pyplot as plt
 import numpy as np
-import uuid
 
 import gymnasium as gym
 import flappy_bird_gymnasium  # Required import to register "FlappyBird-v0"
@@ -31,11 +31,10 @@ class Agent(abc.ABC):
         self._total_rewards: list[float] = []
 
     @abc.abstractmethod
-    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> Actions:
+    def next_action(self, observation: ObsType) -> Actions:
         """Selects an action based on the given observation.
 
         Args:
-            episode_id: The unique identifier for the current episode.
             observation: The current observation from the environment.
 
         Returns:
@@ -44,27 +43,23 @@ class Agent(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
-    ):
+    def notify_reward_and_new_state(self, reward: float, new_observation: ObsType):
         """Notifies the agent of a received reward and new observation.
 
         The environment is responsible for always calling this method after
         calling `step(action)` for an action produced by `next_action(observation)`.
 
         Args:
-            episode_id: The unique identifier for the current episode.
             reward: The reward received after taking an action.
             new_observation: The new observation from the environment.
         """
         pass
 
     @abc.abstractmethod
-    def notify_termination(self, episode_id: uuid.UUID, trajectory: list[Any]):
+    def notify_termination(self, trajectory: list[Any]):
         """Notifies the agent of episode termination.
 
         Args:
-            episode_id: The unique identifier for the current episode.
             trajectory: The full trajectory of the episode.
         """
         pass
@@ -88,24 +83,20 @@ class NaiveCyclicAgent(Agent):
             num_noops_till_flap: Number of no-op actions before a flap action.
         """
         super().__init__()
-        self._action_cycles: dict[uuid.UUID, itertools.cycle] = collections.defaultdict(
-            lambda: itertools.cycle(
-                [ActType.IDLE] * num_noops_till_flap + [ActType.FLAP]
-            )
+        self._action_cycles = itertools.cycle(
+            [ActType.IDLE] * num_noops_till_flap + [ActType.FLAP]
         )
 
     @override
-    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
-        return next(self._action_cycles[episode_id])
+    def next_action(self, observation: ObsType) -> ActType:
+        return next(self._action_cycles)
 
     @override
-    def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
-    ):
+    def notify_reward_and_new_state(self, reward: float, new_observation: ObsType):
         pass
 
     @override
-    def notify_termination(self, episode_id: uuid.UUID, trajectory: list[Any]):
+    def notify_termination(self, trajectory: list[Any]):
         rewards = trajectory[2::3]
         print(f"total reward this episode: {sum(rewards)}")
         self._total_rewards.append(sum(rewards))
@@ -130,7 +121,7 @@ class MonteCarloTabularAgent(Agent):
         return tuple(np.round(obs[30:150:1], 2))
 
     @override
-    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
+    def next_action(self, observation: ObsType) -> ActType:
         observation = self._serialize_observation(observation)
         # Greedy exploitation.
         best_action, best_value = None, float("-inf")
@@ -156,14 +147,12 @@ class MonteCarloTabularAgent(Agent):
         return chosen_action
 
     @override
-    def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
-    ):
+    def notify_reward_and_new_state(self, reward: float, new_observation: ObsType):
         # No-op because MC only updates at episode termination.
         pass
 
     @override
-    def notify_termination(self, episode_id: uuid.UUID, trajectory: list[Any]):
+    def notify_termination(self, trajectory: list[Any]):
         self._episode_count += 1
         # Construct visits counter.
         gain = 0.0
@@ -182,54 +171,22 @@ class MonteCarloTabularAgent(Agent):
 class DQNAgent(Agent):
     """An agent that uses Deep Q-Network to learn a policy."""
 
-    def __init__(self):
+    def __init__(self, env: gym.Env):
         super().__init__()
-        self._checkpoint_callback = CheckpointCallback(
-            save_freq=50000, save_path="./ckpt/", name_prefix="dqn_flappy_bird_model"
-        )
-        try:
-            self._model = DQN.load(
-                "dqn_flappy_bird_model",
-                env=gym.make("FlappyBird-v0", render_mode=None),
-                verbose=1,
-            )
-            self._model.load_replay_buffer("dqn_flappy_bird_replay_buffer")
-        except FileNotFoundError:
-            self._model = DQN(
-                "MlpPolicy",
-                gym.make("FlappyBird-v0", render_mode=None),
-                verbose=1,
-                # Exploration parameters
-                exploration_initial_eps=1.0,
-                exploration_final_eps=0.01,
-                exploration_fraction=0.5,
-            )
-        self._model.learn(
-            total_timesteps=2e6,
-            callback=self._checkpoint_callback,
-            reset_num_timesteps=False,
-            progress_bar=True,
-            log_interval=10,
-        )
-        self._model.save("dqn_flappy_bird_model")
-        self._model.save_replay_buffer("dqn_flappy_bird_replay_buffer")
+        self._model = DQN.load("./model/dqn_flappy_bird", env=env)
 
     @override
-    def next_action(self, episode_id: uuid.UUID, observation: ObsType) -> ActType:
+    def next_action(self, observation: ObsType) -> ActType:
         action, _states = self._model.predict(observation, deterministic=True)
         return ActType(action)
 
     @override
-    def notify_reward_and_new_state(
-        self, episode_id: uuid.UUID, reward: float, new_observation: ObsType
-    ):
+    def notify_reward_and_new_state(self, reward: float, new_observation: ObsType):
         # No-op because DQN handles learning internally.
         pass
 
     @override
-    def notify_termination(self, episode_id: uuid.UUID, trajectory: list[Any]):
+    def notify_termination(self, trajectory: list[Any]):
         rewards = trajectory[2::3]
         print(f"total reward this episode: {sum(rewards)}")
         self._total_rewards.append(sum(rewards))
-        # Train the model at the end of each episode.
-        self._model.learn(total_timesteps=len(trajectory) // 3)
