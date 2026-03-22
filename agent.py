@@ -1,6 +1,7 @@
 import flappy_bird_gymnasium
 import gymnasium
 import itertools
+import random
 import torch
 import yaml
 
@@ -38,18 +39,29 @@ class Agent:
 
         if is_training:
             replay_buffer = ReplayBuffer(capacity=self.replay_buffer_capacity)
+            epsilon = self.epsilon_init
 
         rewards_per_episode = {}
+        epsilon_history = []
 
         for episode in itertools.count():
             state, _ = env.reset()
+            state = torch.tensor(state, dtype=torch.float, device=device)
             terminated = False
             episode_reward = 0
 
             while not terminated:
-                # Next action:
-                # (feed the observation to your agent here)
-                action = env.action_space.sample()
+
+                # Epsilon-greedy action selection.
+                if is_training and random.random() < epsilon:
+                    action = env.action_space.sample()
+                    action = torch.tensor(action, dtype=torch.int64, device=device)
+                else:
+                    action = (
+                        policy_dqn(torch.tensor(state, device=device).unsqueeze(dim=0))
+                        .squeeze(dim=0)
+                        .argmax()
+                    )
 
                 # Processing:
                 # Example obs: [0.9861111111111112, 0.234375, 0.4296875, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.4609375, -0.8, 0.4666666666666667]
@@ -65,7 +77,12 @@ class Agent:
                 # player's vertical position
                 # player's vertical velocity
                 # player's rotation
-                new_state, reward, terminated, _, info = env.step(action)
+                new_state, reward, terminated, _, info = env.step(action.item())
+
+                # Convert to tensors.
+                new_state = torch.tensor(new_state, dtype=torch.float, device=device)
+                reward = torch.tensor(reward, dtype=torch.float, device=device)
+
                 episode_reward += reward
 
                 if is_training:
@@ -77,3 +94,11 @@ class Agent:
                 state = new_state
 
             rewards_per_episode[episode] = episode_reward
+
+            epsilon = max(self.epsilon_min, epsilon * self.epsilon_decay)
+            epsilon_history.append(epsilon)
+
+
+if __name__ == "__main__":
+    agent = Agent("cartpole1")
+    agent.run(is_training=True, render=True)
