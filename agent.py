@@ -2,6 +2,7 @@ import flappy_bird_gymnasium
 import gymnasium
 import itertools
 import torch
+import yaml
 
 from dqn import DQN
 from replay_buffer import ReplayBuffer, Transition
@@ -15,6 +16,16 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
 
 class Agent:
 
+    def __init__(self, app_name="cartpole1"):
+        with open("hyperparameters.yaml", "r") as f:
+            self.config = yaml.safe_load(f)
+            hyperparams = self.config[app_name]
+        self.replay_buffer_capacity = hyperparams["replay_buffer_capacity"]
+        self.batch_size = hyperparams["batch_size"]
+        self.epsilon_init = hyperparams["epsilon_init"]
+        self.epsilon_decay = hyperparams["epsilon_decay"]
+        self.epsilon_min = hyperparams["epsilon_min"]
+
     def run(self, is_training=True, render=False):
 
         # env = gymnasium.make("FlappyBird-v0", render_mode="human" if render else None, use_lidar=False)
@@ -26,7 +37,7 @@ class Agent:
         policy_dqn = DQN(num_sates, num_actions).to(device)
 
         if is_training:
-            replay_buffer = ReplayBuffer(capacity=10000)
+            replay_buffer = ReplayBuffer(capacity=self.replay_buffer_capacity)
 
         rewards_per_episode = {}
 
