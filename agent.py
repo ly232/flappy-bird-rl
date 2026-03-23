@@ -155,8 +155,106 @@ class Agent:
         ```
         """
 
-        for state, action, new_state, reward, terminated in batch:
+        # Instead of self._optimize_inefficient, which is more readable, we
+        # leverage vecotorized operations to speed up the optimization process.
+        states = [transition.state for transition in batch]
+        actions = [transition.action for transition in batch]
+        rewards = [transition.reward for transition in batch]
+        new_states = [transition.new_state for transition in batch]
+        terminations = [transition.terminated for transition in batch]
+        states = torch.stack(states)
+        actions = torch.stack(actions)
+        rewards = torch.stack(rewards)
+        new_states = torch.stack(new_states)
+        terminations = torch.tensor(terminations).float().to(device)
 
+        # Calculate target q values (expected returns).
+        with torch.no_grad():
+            target_q = (
+                rewards
+                + (1 - terminations)
+                * self.discount_factor_g
+                * target_dqn(new_states).max(dim=1)[0]
+            )
+            """
+            target_dqn(new_states) ==> tensor([[1, 2, 3], [4, 5, 6]])
+              .max(dim=1) ==> torch.return_types.max(values=tensor([3, 6]), indices=tensor([3, 0, 0, 1]))
+                [0]  ==> tensor([3, 6])
+            """
+
+        # Calculate policy q values from current policy.
+        current_q = (
+            policy_dqn(states).gather(dim=1, index=actions.unsqueeze(dim=1)).squeeze()
+        )
+        """
+        policy_dqn(states) looks like 
+
+        ```
+        tensor([[-0.2207,  0.1549],
+            [ 0.0648,  0.0782],
+            [-0.1931,  0.0639],
+            [-0.2361,  0.0767],
+            [-0.1340,  0.0462],
+            ...
+        ```
+
+        `.gather(dim=1, index=actions.unsqueeze(dim=1))` selects the 1st dimension
+        according to the actions. actions look like this:
+
+        ```
+        tensor([0, 1, 0, 1, 0, ...])
+        ```
+
+        and `actions.unsqueeze(dim=1)` looks like this:
+
+        ```
+        tensor([[0],
+            [1],
+            [0],
+            [0],
+            [1],
+            [0],
+            ...
+        ```
+
+        `policy_dqn(states).gather(dim=1, index=actions.unsqueeze(dim=1))` looks like this:
+
+        ```
+        tensor([[ 0.1549],
+            [ 0.0782],
+            [-0.1931],
+            [-0.2361],
+            [ 0.0462],
+            [ 0.0770],
+            [-0.1968],
+            [ 0.0885],
+            [-0.0743],
+            [ 0.0887],
+            [ 0.0654],
+            ...
+        ```
+
+        so we need one last `.squeeze()` to get rid of the extra dimension:
+
+        ```
+        tensor([ 0.1549,  0.0782, -0.1931, -0.2361,  0.0462,  0.0770, -0.1968,  0.0885,
+                -0.0743,  0.0887,  0.0654,  0.1921, -0.1401,  0.0602,  0.0347,  0.0531,
+                -0.1914,  0.1662,  0.0657, -0.1878, -0.0312,  0.0561,  0.0652,  0.0354,
+                -0.1866,  0.0109,  0.0642, -0.2321, -0.2385, -0.1706, -0.2369, -0.1900],
+            device='mps:0', grad_fn=<SqueezeBackward0>)
+        ```
+        """
+
+        # Below are as `self._optimize_inefficient`.
+        loss = self.loss_fn(current_q, target_q)
+        self.policy_network_optimizer.zero_grad()  # clear gradients.
+        loss.backward()  # backprop to compute gradients.
+        self.policy_network_optimizer.step()  # update *policy* network.
+
+    def _optimize_inefficient(
+        self, batch: list[Transition], policy_dqn: DQN, target_dqn: DQN
+    ) -> None:
+        for state, action, new_state, reward, terminated in batch:
             if terminated:
                 target = reward
             else:

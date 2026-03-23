@@ -3,7 +3,7 @@ from collections import deque, namedtuple
 import random
 
 Transition = namedtuple(
-    "Transition", ("state", "action", "reward", "next_state", "done")
+    "Transition", ("state", "action", "reward", "new_state", "terminated")
 )
 
 
