@@ -1,12 +1,40 @@
-import flappy_bird_gymnasium
+"""DQN RL Agent.
+
+Example invocation:
+
+Training:
+  uv run agent.py flappybird1 --train
+
+Inference:
+  uv run agent.py flappybird1
+"""
+
+import argparse
 import gymnasium
+import flappy_bird_gymnasium  # required for `gymnasium.make('FlappyBird-v0')`
 import itertools
 import random
 import torch
 import yaml
+import os
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 
+from datetime import datetime, timedelta
 from dqn import DQN
 from replay_buffer import ReplayBuffer, Transition
+
+### plotting
+
+DATE_FORMAT = "%m-%d %H:%M:%S"
+RUNS_DIR = "runs"  # store logs, training data, graphs, etc.
+os.makedirs(RUNS_DIR, exist_ok=True)
+
+# Agg used to generate plots and save to file, instead of rendering on screen.
+matplotlib.use("Agg")
+
+###
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -21,6 +49,7 @@ class Agent:
         with open("hyperparameters.yaml", "r") as f:
             self.config = yaml.safe_load(f)
             hyperparams = self.config[app_name]
+        self.env_id = hyperparams["env_id"]
         self.replay_buffer_capacity = hyperparams["replay_buffer_capacity"]
         self.batch_size = hyperparams["batch_size"]
         self.epsilon_init = hyperparams["epsilon_init"]
@@ -29,14 +58,20 @@ class Agent:
         self.network_sync_rate = hyperparams["network_sync_rate"]
         self.learning_rate_a = hyperparams["learning_rate_a"]
         self.discount_factor_g = hyperparams["discount_factor_g"]
+        self.stop_on_reward = hyperparams["stop_on_reward"]
+        self.fc1_nodes = hyperparams["fc1_nodes"]
 
         self.loss_fn = torch.nn.MSELoss()
         self.policy_network_optimizer = None
 
+        # Path to run info.
+        self.LOG_FILE = os.path.join(RUNS_DIR, f"{app_name}.log")
+        self.MODEL_FILE = os.path.join(RUNS_DIR, f"{app_name}.pt")
+        self.GRAPH_FILE = os.path.join(RUNS_DIR, f"{app_name}.png")
+
     def run(self, is_training=True, render=False):
 
-        # env = gymnasium.make("FlappyBird-v0", render_mode="human" if render else None, use_lidar=False)
-        env = gymnasium.make("CartPole-v1", render_mode="human" if render else None)
+        env = gymnasium.make(self.env_id, render_mode="human" if render else None)
 
         num_actions = env.action_space.n
         num_sates = env.observation_space.shape[0]
@@ -44,14 +79,22 @@ class Agent:
         # The behavioral policy network. Note DQN is off-policy, and policy_dqn
         # here is the main network on-policy. The target network for off-policy
         # is a different one.
-        policy_dqn = DQN(num_sates, num_actions).to(device)
+        policy_dqn = DQN(num_sates, num_actions, self.fc1_nodes).to(device)
 
         if is_training:
+            start_time = datetime.now()
+            last_graph_update_time = start_time
+
+            log_message = f"{start_time.strftime(DATE_FORMAT)}: Start training."
+            print(log_message)
+            with open(self.LOG_FILE, "w") as f:
+                f.write(log_message + "\n")
+
             replay_buffer = ReplayBuffer(capacity=self.replay_buffer_capacity)
             epsilon = self.epsilon_init
 
             # Creates the target DQN.
-            target_dqn = DQN(num_sates, num_actions).to(device)
+            target_dqn = DQN(num_sates, num_actions, self.fc1_nodes).to(device)
             # Copies weights and baises from policy_dqn to target_dqn. They need
             # to be identical at the beginning of training, though as training
             # progresses, target network will diverge to avoid optimizing over
@@ -68,16 +111,29 @@ class Agent:
                 policy_dqn.parameters(), lr=self.learning_rate_a
             )
 
+            # Tracks best reward.
+            best_reward = float("-inf")
+
+            epsilon_history = []
+        else:  # not training
+            # Load learned policy.
+            policy_dqn.load_state_dict(torch.load(self.MODEL_FILE))
+            policy_dqn.eval()  # disable dropouts, batch norms, etc.
+
         rewards_per_episode = {}
-        epsilon_history = []
 
         for episode in itertools.count():
+            if episode % 10 == 0:
+                print(
+                    f"Episode {episode} started at {datetime.now().strftime(DATE_FORMAT)}."
+                )
+
             state, _ = env.reset()
             state = torch.tensor(state, dtype=torch.float, device=device)
             terminated = False
             episode_reward = 0
 
-            while not terminated:
+            while not terminated and episode_reward < self.stop_on_reward:
 
                 # Epsilon-greedy action selection.
                 if is_training and random.random() < epsilon:
@@ -124,18 +180,62 @@ class Agent:
 
             rewards_per_episode[episode] = episode_reward
 
-            epsilon = max(self.epsilon_min, epsilon * self.epsilon_decay)
-            epsilon_history.append(epsilon)
+            # Saves the model when best reward is obtained.
+            if is_training:
+                if episode_reward > best_reward:
+                    log_message = f"{datetime.now().strftime(DATE_FORMAT)}: New best reward: {episode_reward:.2f} at episode {episode}."
+                    print(log_message)
+                    with open(self.LOG_FILE, "a") as f:
+                        f.write(log_message + "\n")
+                    torch.save(policy_dqn.state_dict(), self.MODEL_FILE)
+                    best_reward = episode_reward
 
-            # Check if enough experiences have been collected in replay buffer,
-            # and if so, optimize policy and target DQNs together.
-            if len(replay_buffer) > self.batch_size:
-                batch = replay_buffer.sample(self.batch_size)
-                self.optimize(batch, policy_dqn, target_dqn)
+                # Update graph every x seconds.
+                current_time = datetime.now()
+                if current_time - last_graph_update_time < timedelta(seconds=10):
+                    self.save_graph(rewards_per_episode, epsilon_history)
+                    last_graph_update_time = current_time
 
-                if step_count > self.network_sync_rate:
-                    target_dqn.load_state_dict(policy_dqn.state_dict())
-                    step_count = 0
+                epsilon = max(self.epsilon_min, epsilon * self.epsilon_decay)
+                epsilon_history.append(epsilon)
+
+                # Check if enough experiences have been collected in replay buffer,
+                # and if so, optimize policy and target DQNs together.
+                if len(replay_buffer) > self.batch_size:
+                    batch = replay_buffer.sample(self.batch_size)
+                    self.optimize(batch, policy_dqn, target_dqn)
+
+                    if step_count > self.network_sync_rate:
+                        target_dqn.load_state_dict(policy_dqn.state_dict())
+                        step_count = 0
+            else:  # Not in training mode; exist after 1 episode.
+                break
+
+    def save_graph(self, rewards_per_episode, epsilon_history):
+        fig = plt.figure(1)
+
+        # Plot average rewards (y) vs. episodes (x).
+        mean_rewards = np.zeros(len(rewards_per_episode))
+        for x in range(len(mean_rewards)):
+            mean_rewards[x] = np.mean(
+                list(map(lambda tensor: tensor.cpu(), rewards_per_episode.values()))[
+                    max(0, x - 99) : x + 1
+                ]
+            )
+        plt.subplot(121)  # plot on a 1 row x 2 col grid, at cell 1.
+        plt.xlabel("Episodes")
+        plt.ylabel("Mean Rewards (over last 100 episodes)")
+        plt.plot(mean_rewards)
+
+        # Plot epsilon decay (y) vs. episodes (x).
+        plt.subplot(122)  # plot on a 1 row x 2 col grid, at cell 2.
+        plt.xlabel("Episodes")
+        plt.ylabel("Epsilon Decay")
+        plt.plot(epsilon_history)
+
+        plt.subplots_adjust(wspace=1.0, hspace=1.0)
+        fig.savefig(self.GRAPH_FILE, format="png")
+        plt.close(fig)
 
     def optimize(
         self, batch: list[Transition], policy_dqn: DQN, target_dqn: DQN
@@ -289,5 +389,13 @@ class Agent:
 
 
 if __name__ == "__main__":
-    agent = Agent("cartpole1")
-    agent.run(is_training=True, render=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("app_name", help="cartpole1, flappybird1, etc.")
+    parser.add_argument("--train", action="store_true", help="Training mode.")
+    args = parser.parse_args()
+
+    agent = Agent(args.app_name)
+    if args.train:
+        agent.run(is_training=True, render=False)
+    else:
+        agent.run(is_training=False, render=True)

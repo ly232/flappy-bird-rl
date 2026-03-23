@@ -10,7 +10,6 @@ wheels/
 .venv
 
 # Developement files
-.vscode
 uv.lock
 *.pkl
 *.zip
