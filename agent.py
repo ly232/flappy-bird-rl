@@ -26,6 +26,12 @@ class Agent:
         self.epsilon_init = hyperparams["epsilon_init"]
         self.epsilon_decay = hyperparams["epsilon_decay"]
         self.epsilon_min = hyperparams["epsilon_min"]
+        self.network_sync_rate = hyperparams["network_sync_rate"]
+        self.learning_rate_a = hyperparams["learning_rate_a"]
+        self.discount_factor_g = hyperparams["discount_factor_g"]
+
+        self.loss_fn = torch.nn.MSELoss()
+        self.policy_network_optimizer = None
 
     def run(self, is_training=True, render=False):
 
@@ -35,11 +41,32 @@ class Agent:
         num_actions = env.action_space.n
         num_sates = env.observation_space.shape[0]
 
+        # The behavioral policy network. Note DQN is off-policy, and policy_dqn
+        # here is the main network on-policy. The target network for off-policy
+        # is a different one.
         policy_dqn = DQN(num_sates, num_actions).to(device)
 
         if is_training:
             replay_buffer = ReplayBuffer(capacity=self.replay_buffer_capacity)
             epsilon = self.epsilon_init
+
+            # Creates the target DQN.
+            target_dqn = DQN(num_sates, num_actions).to(device)
+            # Copies weights and baises from policy_dqn to target_dqn. They need
+            # to be identical at the beginning of training, though as training
+            # progresses, target network will diverge to avoid optimizing over
+            # a moving target if we were to only have one network.
+            target_dqn.load_state_dict(policy_dqn.state_dict())
+
+            # Tracks steps taken to determine when to update the target DQN. In
+            # the seminal 2015 Nature paper "Human-level control through deep
+            # reinforcement learning", this is done every 10,000 steps.
+            step_count = 0
+
+            # Policy network optimizer.
+            self.policy_network_optimizer = torch.optim.Adam(
+                policy_dqn.parameters(), lr=self.learning_rate_a
+            )
 
         rewards_per_episode = {}
         epsilon_history = []
@@ -91,12 +118,76 @@ class Agent:
                     )
                     replay_buffer.append(transition)
 
+                    step_count += 1
+
                 state = new_state
 
             rewards_per_episode[episode] = episode_reward
 
             epsilon = max(self.epsilon_min, epsilon * self.epsilon_decay)
             epsilon_history.append(epsilon)
+
+            # Check if enough experiences have been collected in replay buffer,
+            # and if so, optimize policy and target DQNs together.
+            if len(replay_buffer) > self.batch_size:
+                batch = replay_buffer.sample(self.batch_size)
+                self.optimize(batch, policy_dqn, target_dqn)
+
+                if step_count > self.network_sync_rate:
+                    target_dqn.load_state_dict(policy_dqn.state_dict())
+                    step_count = 0
+
+    def optimize(
+        self, batch: list[Transition], policy_dqn: DQN, target_dqn: DQN
+    ) -> None:
+        """Optimize the policy and target DQNs together.
+
+        In regular Q-learning, we have:
+
+        ```
+        q[state, action] = q[state, action] + alpha * (reward + gamma * max(q[new_state, :]) - q[state, action])
+        ```
+
+        For DQN target, by definition of q[state, action], we have:
+
+        ```
+        q[state, action] = reward if new_state is terminal else reward + gamma * max(q[new_state, :])
+        ```
+        """
+
+        for state, action, new_state, reward, terminated in batch:
+
+            if terminated:
+                target = reward
+            else:
+                with torch.no_grad():
+                    target_q = (
+                        reward + self.discount_factor_g * target_dqn(new_state).max()
+                    )
+
+            # Notice how we decoupled target_dqn from policy_dqn. If we were to
+            # use policy_dqn to compute the target, then we would be
+            # optimizing over a moving target, which is unstable. By using a
+            # separate target_dqn, we can keep the target fixed for a number of
+            # steps, and only update it periodically by copying weights from
+            # policy_dqn.
+            current_q = policy_dqn(state)
+
+            # Compute loss as diff between 2 networks. This is the key ingrident
+            # to DQN - we're NOT doing a supervised-learning (there is no y to
+            # ground the loss on), but instead we rely on RL to learn the y as
+            # the target DQN.
+            loss = self.loss_fn(current_q, target_q)
+
+            # Optimize the model. Note the optimizer is strictly for the policy
+            # network, NEVER for the target network. In fact, target network is
+            # just a old snapshot of the policy network's w eights, but when we
+            # compute the loss, the target is the max of q values over all
+            # actions of the new_state, making it a decoupled target from the
+            # actively evolving q network.
+            self.policy_network_optimizer.zero_grad()  # clear gradients.
+            loss.backward()  # backprop to compute gradients.
+            self.policy_network_optimizer.step()  # update *policy* network.
 
 
 if __name__ == "__main__":
