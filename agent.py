@@ -3,10 +3,10 @@
 Example invocation:
 
 Training:
-  uv run agent.py flappybird1 --train
+  uv run agent.py flappybird2 --train
 
 Inference:
-  uv run agent.py flappybird1
+  uv run agent.py flappybird2
 """
 
 import argparse
@@ -129,7 +129,6 @@ class Agent:
                 )
 
             state, _ = env.reset()
-            state = torch.tensor(state, dtype=torch.float, device=device)
             terminated = False
             episode_reward = 0
 
@@ -138,13 +137,11 @@ class Agent:
                 # Epsilon-greedy action selection.
                 if is_training and random.random() < epsilon:
                     action = env.action_space.sample()
-                    action = torch.tensor(action, dtype=torch.int64, device=device)
                 else:
-                    action = (
-                        policy_dqn(torch.tensor(state, device=device).unsqueeze(dim=0))
-                        .squeeze(dim=0)
-                        .argmax()
-                    )
+                    state_tensor = torch.tensor(
+                        state, dtype=torch.float, device=device
+                    ).unsqueeze(dim=0)
+                    action = policy_dqn(state_tensor).squeeze(dim=0).argmax().item()
 
                 # Processing:
                 # Example obs: [0.9861111111111112, 0.234375, 0.4296875, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.4609375, -0.8, 0.4666666666666667]
@@ -160,12 +157,7 @@ class Agent:
                 # player's vertical position
                 # player's vertical velocity
                 # player's rotation
-                new_state, reward, terminated, _, info = env.step(action.item())
-
-                # Convert to tensors.
-                new_state = torch.tensor(new_state, dtype=torch.float, device=device)
-                reward = torch.tensor(reward, dtype=torch.float, device=device)
-
+                new_state, reward, terminated, _, info = env.step(action)
                 episode_reward += reward
 
                 if is_training:
@@ -173,7 +165,6 @@ class Agent:
                         state, action, reward, new_state, terminated
                     )
                     replay_buffer.append(transition)
-
                     step_count += 1
 
                 state = new_state
@@ -192,7 +183,7 @@ class Agent:
 
                 # Update graph every x seconds.
                 current_time = datetime.now()
-                if current_time - last_graph_update_time < timedelta(seconds=10):
+                if current_time - last_graph_update_time > timedelta(seconds=10):
                     self.save_graph(rewards_per_episode, epsilon_history)
                     last_graph_update_time = current_time
 
@@ -218,9 +209,7 @@ class Agent:
         mean_rewards = np.zeros(len(rewards_per_episode))
         for x in range(len(mean_rewards)):
             mean_rewards[x] = np.mean(
-                list(map(lambda tensor: tensor.cpu(), rewards_per_episode.values()))[
-                    max(0, x - 99) : x + 1
-                ]
+                list(rewards_per_episode.values())[max(0, x - 99) : x + 1]
             )
         plt.subplot(121)  # plot on a 1 row x 2 col grid, at cell 1.
         plt.xlabel("Episodes")
@@ -257,16 +246,21 @@ class Agent:
 
         # Instead of self._optimize_inefficient, which is more readable, we
         # leverage vecotorized operations to speed up the optimization process.
-        states = [transition.state for transition in batch]
-        actions = [transition.action for transition in batch]
-        rewards = [transition.reward for transition in batch]
-        new_states = [transition.new_state for transition in batch]
-        terminations = [transition.terminated for transition in batch]
-        states = torch.stack(states)
-        actions = torch.stack(actions)
-        rewards = torch.stack(rewards)
-        new_states = torch.stack(new_states)
-        terminations = torch.tensor(terminations).float().to(device)
+        states = torch.tensor(
+            np.array([t.state for t in batch]), dtype=torch.float, device=device
+        )
+        actions = torch.tensor(
+            np.array([t.action for t in batch]), dtype=torch.int64, device=device
+        )
+        rewards = torch.tensor(
+            np.array([t.reward for t in batch]), dtype=torch.float, device=device
+        )
+        new_states = torch.tensor(
+            np.array([t.new_state for t in batch]), dtype=torch.float, device=device
+        )
+        terminations = torch.tensor(
+            np.array([t.terminated for t in batch]), dtype=torch.float, device=device
+        )
 
         # Calculate target q values (expected returns).
         with torch.no_grad():
