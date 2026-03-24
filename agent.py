@@ -21,6 +21,7 @@ import os
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+import imageio
 
 from datetime import datetime, timedelta
 from dqn import DQN
@@ -218,6 +219,15 @@ class Agent:
                 break
 
         env.close()
+
+        # Convert MP4 to GIF if in inference mode
+        if not is_training:
+            mp4_file = os.path.join(RUNS_DIR, f"{self.app_name}_video-episode-0.mp4")
+            gif_file = os.path.join(RUNS_DIR, f"{self.app_name}_video-episode-0.gif")
+            if os.path.exists(mp4_file):
+                reader = imageio.get_reader(mp4_file)
+                imageio.mimsave(gif_file, [frame for frame in reader])
+                print(f"Saved GIF to {gif_file}")
 
     def save_graph(self, rewards_per_episode, epsilon_history):
         fig = plt.figure(1)
