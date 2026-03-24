@@ -11,6 +11,7 @@ Inference:
 
 import argparse
 import gymnasium
+from gymnasium.wrappers import RecordVideo
 import flappy_bird_gymnasium  # required for `gymnasium.make('FlappyBird-v0')`
 import itertools
 import random
@@ -46,6 +47,7 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
 class Agent:
 
     def __init__(self, app_name="cartpole1"):
+        self.app_name = app_name
         with open("hyperparameters.yaml", "r") as f:
             self.config = yaml.safe_load(f)
             hyperparams = self.config[app_name]
@@ -71,7 +73,20 @@ class Agent:
 
     def run(self, is_training=True, render=False):
 
-        env = gymnasium.make(self.env_id, render_mode="human" if render else None)
+        # Use rgb_array for recording video, human for rendering
+        render_mode = None
+        if not is_training:
+            render_mode = "rgb_array"
+        elif render:
+            render_mode = "human"
+
+        env = gymnasium.make(self.env_id, render_mode=render_mode)
+
+        # Record video when in inference mode
+        if not is_training:
+            env = RecordVideo(
+                env, video_folder=RUNS_DIR, name_prefix=f"{self.app_name}_video"
+            )
 
         num_actions = env.action_space.n
         num_sates = env.observation_space.shape[0]
@@ -201,6 +216,8 @@ class Agent:
                         step_count = 0
             else:  # Not in training mode; exist after 1 episode.
                 break
+
+        env.close()
 
     def save_graph(self, rewards_per_episode, epsilon_history):
         fig = plt.figure(1)
